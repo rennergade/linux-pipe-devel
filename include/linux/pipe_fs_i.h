@@ -2,6 +2,8 @@
 #ifndef _LINUX_PIPE_FS_I_H
 #define _LINUX_PIPE_FS_I_H
 
+#include <linux/kfifo.h>
+
 #define PIPE_DEF_BUFFERS	16
 
 #define PIPE_BUF_FLAG_LRU	0x01	/* page is on the LRU */
@@ -76,6 +78,9 @@ struct pipe_inode_info {
 	struct fasync_struct *fasync_readers;
 	struct fasync_struct *fasync_writers;
 	struct pipe_buffer *bufs;
+	struct kfifo *pipe_fifo;
+	spinlock_t *reader_spinlock;
+	spinlock_t *writer_spinlock;
 	struct user_struct *user;
 #ifdef CONFIG_WATCH_QUEUE
 	struct watch_queue *watch_queue;
@@ -145,9 +150,9 @@ static inline bool pipe_has_watch_queue(const struct pipe_inode_info *pipe)
  * @head: The pipe ring head pointer
  * @tail: The pipe ring tail pointer
  */
-static inline bool pipe_empty(unsigned int head, unsigned int tail)
+static inline bool pipe_empty(struct kfifo *pipe_fifo)
 {
-	return head == tail;
+	return kfifo_is_empty(pipe_fifo);
 }
 
 /**
@@ -155,9 +160,9 @@ static inline bool pipe_empty(unsigned int head, unsigned int tail)
  * @head: The pipe ring head pointer
  * @tail: The pipe ring tail pointer
  */
-static inline unsigned int pipe_occupancy(unsigned int head, unsigned int tail)
+static inline unsigned int pipe_occupancy(struct kfifo *pipe_fifo)
 {
-	return head - tail;
+	return kfifo_len(pipe_fifo);
 }
 
 /**
@@ -166,10 +171,10 @@ static inline unsigned int pipe_occupancy(unsigned int head, unsigned int tail)
  * @tail: The pipe ring tail pointer
  * @limit: The maximum amount of slots available.
  */
-static inline bool pipe_full(unsigned int head, unsigned int tail,
+static inline bool pipe_full(struct kfifo *pipe_fifo,
 			     unsigned int limit)
 {
-	return pipe_occupancy(head, tail) >= limit;
+	return pipe_occupancy(pipe_fifo) >= limit;
 }
 
 /**

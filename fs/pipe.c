@@ -210,11 +210,9 @@ static const struct pipe_buf_operations anon_pipe_buf_ops = {
 /* Done while waiting without holding the pipe lock - thus the READ_ONCE() */
 static inline bool pipe_readable(const struct pipe_inode_info *pipe)
 {
-	unsigned int head = READ_ONCE(pipe->head);
-	unsigned int tail = READ_ONCE(pipe->tail);
 	unsigned int writers = READ_ONCE(pipe->writers);
 
-	return !pipe_empty(head, tail) || !writers;
+	return !pipe_empty(pipe->pipe_fifo) || !writers;
 }
 
 static inline unsigned int pipe_update_tail(struct pipe_inode_info *pipe,
@@ -261,7 +259,6 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 		return 0;
 
 	ret = 0;
-	mutex_lock(&pipe->mutex);
 
 	/*
 	 * We only wake up writers if the pipe was full when we started reading
@@ -272,11 +269,8 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 	 * data for us.
 	 */
 	for (;;) {
-		/* Read ->head with a barrier vs post_one_notification() */
-		unsigned int head = smp_load_acquire(&pipe->head);
-		unsigned int tail = pipe->tail;
-		unsigned int mask = pipe->ring_size - 1;
 
+// TODO: fix watch queue NR
 #ifdef CONFIG_WATCH_QUEUE
 		if (pipe->note_loss) {
 			struct watch_notification n;
@@ -301,52 +295,30 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 		}
 #endif
 
-		if (!pipe_empty(head, tail)) {
-			struct pipe_buffer *buf = &pipe->bufs[tail & mask];
-			size_t chars = buf->len;
-			size_t written;
-			int error;
+		if (!pipe_empty(pipe->pipe_fifo)) {
 
-			if (chars > total_len) {
-				if (buf->flags & PIPE_BUF_FLAG_WHOLE) {
-					if (ret == 0)
-						ret = -ENOBUFS;
-					break;
-				}
-				chars = total_len;
+			int written;
+			
+			written = kfifo_out_locked(pipe->pipe_fifo, to, total_len, pipe->reader_spinlock);
+
+
+			//TODO packet buffers? - NR
+
+			// /* Was it a packet buffer? Clean up and exit */
+			// if (buf->flags & PIPE_BUF_FLAG_PACKET) {
+			// 	total_len = chars;
+			// 	buf->len = 0;
+			// }
+
+			// NR - I changed this to if we read more than a page from having an empty page buffer, not sure if thats right
+			if (written >= PAGE_SIZE) {
+				wake_writer |= pipe_full(pipe->pipe_fifo, pipe->max_usage);
 			}
 
-			error = pipe_buf_confirm(pipe, buf);
-			if (error) {
-				if (!ret)
-					ret = error;
-				break;
-			}
-
-			written = copy_page_to_iter(buf->page, buf->offset, chars, to);
-			if (unlikely(written < chars)) {
-				if (!ret)
-					ret = -EFAULT;
-				break;
-			}
-			ret += chars;
-			buf->offset += chars;
-			buf->len -= chars;
-
-			/* Was it a packet buffer? Clean up and exit */
-			if (buf->flags & PIPE_BUF_FLAG_PACKET) {
-				total_len = chars;
-				buf->len = 0;
-			}
-
-			if (!buf->len) {
-				wake_writer |= pipe_full(head, tail, pipe->max_usage);
-				tail = pipe_update_tail(pipe, buf, tail);
-			}
-			total_len -= chars;
-			if (!total_len)
+			// NR - changed this to break if anything is read
+			if (!written)
 				break;	/* common path: read succeeded */
-			if (!pipe_empty(head, tail))	/* More to do? */
+			if (!pipe_empty(pipe->pipe_fifo))	/* More to do? */
 				continue;
 		}
 
@@ -359,7 +331,6 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 			ret = -EAGAIN;
 			break;
 		}
-		mutex_unlock(&pipe->mutex);
 
 		/*
 		 * We only get here if we didn't actually read anything.
@@ -393,11 +364,9 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 
 		wake_writer = false;
 		wake_next_reader = true;
-		mutex_lock(&pipe->mutex);
 	}
-	if (pipe_empty(pipe->head, pipe->tail))
+	if (pipe_empty(pipe->pipe_fifo))
 		wake_next_reader = false;
-	mutex_unlock(&pipe->mutex);
 
 	if (wake_writer)
 		wake_up_interruptible_sync_poll(&pipe->wr_wait, EPOLLOUT | EPOLLWRNORM);
@@ -417,11 +386,9 @@ static inline int is_packetized(struct file *file)
 /* Done while waiting without holding the pipe lock - thus the READ_ONCE() */
 static inline bool pipe_writable(const struct pipe_inode_info *pipe)
 {
-	unsigned int head = READ_ONCE(pipe->head);
-	unsigned int tail = READ_ONCE(pipe->tail);
 	unsigned int max_usage = READ_ONCE(pipe->max_usage);
 
-	return !pipe_full(head, tail, max_usage) ||
+	return !pipe_full(pipe->pipe_fifo, max_usage) ||
 		!READ_ONCE(pipe->readers);
 }
 
@@ -430,10 +397,8 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 {
 	struct file *filp = iocb->ki_filp;
 	struct pipe_inode_info *pipe = filp->private_data;
-	unsigned int head;
 	ssize_t ret = 0;
 	size_t total_len = iov_iter_count(from);
-	ssize_t chars;
 	bool was_empty = false;
 	bool wake_next_writer = false;
 
@@ -453,7 +418,6 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 	if (unlikely(total_len == 0))
 		return 0;
 
-	mutex_lock(&pipe->mutex);
 
 	if (!pipe->readers) {
 		send_sig(SIGPIPE, current, 0);
@@ -461,39 +425,9 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 		goto out;
 	}
 
-	/*
-	 * If it wasn't empty we try to merge new data into
-	 * the last buffer.
-	 *
-	 * That naturally merges small writes, but it also
-	 * page-aligns the rest of the writes for large writes
-	 * spanning multiple pages.
-	 */
-	head = pipe->head;
-	was_empty = pipe_empty(head, pipe->tail);
-	chars = total_len & (PAGE_SIZE-1);
-	if (chars && !was_empty) {
-		unsigned int mask = pipe->ring_size - 1;
-		struct pipe_buffer *buf = &pipe->bufs[(head - 1) & mask];
-		int offset = buf->offset + buf->len;
+	// NR removed page merge, shouldnt be needed here anymore
 
-		if ((buf->flags & PIPE_BUF_FLAG_CAN_MERGE) &&
-		    offset + chars <= PAGE_SIZE) {
-			ret = pipe_buf_confirm(pipe, buf);
-			if (ret)
-				goto out;
 
-			ret = copy_page_from_iter(buf->page, offset, chars, from);
-			if (unlikely(ret < chars)) {
-				ret = -EFAULT;
-				goto out;
-			}
-
-			buf->len += ret;
-			if (!iov_iter_count(from))
-				goto out;
-		}
-	}
 
 	for (;;) {
 		if (!pipe->readers) {
@@ -503,55 +437,18 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 			break;
 		}
 
-		head = pipe->head;
-		if (!pipe_full(head, pipe->tail, pipe->max_usage)) {
-			unsigned int mask = pipe->ring_size - 1;
-			struct pipe_buffer *buf;
-			struct page *page = pipe->tmp_page;
+		if (!pipe_full(pipe->pipe_fifo, pipe->max_usage)) {
 			int copied;
 
-			if (!page) {
-				page = alloc_page(GFP_HIGHUSER | __GFP_ACCOUNT);
-				if (unlikely(!page)) {
-					ret = ret ? : -ENOMEM;
-					break;
-				}
-				pipe->tmp_page = page;
-			}
+			copied = kfifo_in_locked(pipe->pipe_fifo, from, total_len, pipe->writer_spinlock);
 
-			/* Allocate a slot in the ring in advance and attach an
-			 * empty buffer.  If we fault or otherwise fail to use
-			 * it, either the reader will consume it or it'll still
-			 * be there for the next write.
-			 */
-			pipe->head = head + 1;
-
-			/* Insert it into the buffer array */
-			buf = &pipe->bufs[head & mask];
-			buf->page = page;
-			buf->ops = &anon_pipe_buf_ops;
-			buf->offset = 0;
-			buf->len = 0;
-			if (is_packetized(filp))
-				buf->flags = PIPE_BUF_FLAG_PACKET;
-			else
-				buf->flags = PIPE_BUF_FLAG_CAN_MERGE;
-			pipe->tmp_page = NULL;
-
-			copied = copy_page_from_iter(page, 0, PAGE_SIZE, from);
-			if (unlikely(copied < PAGE_SIZE && iov_iter_count(from))) {
-				if (!ret)
-					ret = -EFAULT;
-				break;
-			}
 			ret += copied;
-			buf->len = copied;
 
 			if (!iov_iter_count(from))
 				break;
 		}
 
-		if (!pipe_full(head, pipe->tail, pipe->max_usage))
+		if (!pipe_full(pipe->pipe_fifo, pipe->max_usage))
 			continue;
 
 		/* Wait for buffer space to become available. */
@@ -573,19 +470,17 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 		 * after waiting we need to re-check whether the pipe
 		 * become empty while we dropped the lock.
 		 */
-		mutex_unlock(&pipe->mutex);
 		if (was_empty)
 			wake_up_interruptible_sync_poll(&pipe->rd_wait, EPOLLIN | EPOLLRDNORM);
 		kill_fasync(&pipe->fasync_readers, SIGIO, POLL_IN);
 		wait_event_interruptible_exclusive(pipe->wr_wait, pipe_writable(pipe));
-		mutex_lock(&pipe->mutex);
-		was_empty = pipe_empty(pipe->head, pipe->tail);
+
+		was_empty = pipe_empty(pipe->pipe_fifo);
 		wake_next_writer = true;
 	}
 out:
-	if (pipe_full(pipe->head, pipe->tail, pipe->max_usage))
+	if (pipe_full(pipe->pipe_fifo, pipe->max_usage))
 		wake_next_writer = false;
-	mutex_unlock(&pipe->mutex);
 
 	/*
 	 * If we do do a wakeup event, we do a 'sync' wakeup, because we
@@ -659,7 +554,6 @@ pipe_poll(struct file *filp, poll_table *wait)
 {
 	__poll_t mask;
 	struct pipe_inode_info *pipe = filp->private_data;
-	unsigned int head, tail;
 
 	/* Epoll has some historical nasty semantics, this enables them */
 	WRITE_ONCE(pipe->poll_usage, true);
@@ -680,19 +574,17 @@ pipe_poll(struct file *filp, poll_table *wait)
 	 * if something changes and you got it wrong, the poll
 	 * table entry will wake you up and fix it.
 	 */
-	head = READ_ONCE(pipe->head);
-	tail = READ_ONCE(pipe->tail);
 
 	mask = 0;
 	if (filp->f_mode & FMODE_READ) {
-		if (!pipe_empty(head, tail))
+		if (!pipe_empty(pipe->pipe_fifo))
 			mask |= EPOLLIN | EPOLLRDNORM;
 		if (!pipe->writers && filp->f_pipe != pipe->w_counter)
 			mask |= EPOLLHUP;
 	}
 
 	if (filp->f_mode & FMODE_WRITE) {
-		if (!pipe_full(head, tail, pipe->max_usage))
+		if (!pipe_full(pipe->pipe_fifo, pipe->max_usage))
 			mask |= EPOLLOUT | EPOLLWRNORM;
 		/*
 		 * Most Unices do not set EPOLLERR for FIFOs but on Linux they
@@ -816,6 +708,18 @@ struct pipe_inode_info *alloc_pipe_info(void)
 	pipe->bufs = kcalloc(pipe_bufs, sizeof(struct pipe_buffer),
 			     GFP_KERNEL_ACCOUNT);
 
+	/// I'm going to initialize a kfifo here using the alloc macro and then store it in the pipe struct - NR
+	struct kfifo fifo;
+	
+	if (!kfifo_alloc(&fifo, BIT(pipe_bufs), GFP_KERNEL))
+		goto out_revert_acct;
+
+	pipe->pipe_fifo = &fifo;
+
+	spin_lock_init(pipe->writer_spinlock);
+	spin_lock_init(pipe->reader_spinlock);
+
+
 	if (pipe->bufs) {
 		init_waitqueue_head(&pipe->rd_wait);
 		init_waitqueue_head(&pipe->wr_wait);
@@ -859,6 +763,10 @@ void free_pipe_info(struct pipe_inode_info *pipe)
 #endif
 	if (pipe->tmp_page)
 		__free_page(pipe->tmp_page);
+
+	//free the fifo - NR
+
+	kfifo_free(pipe->pipe_fifo);
 	kfree(pipe->bufs);
 	kfree(pipe);
 }
@@ -1276,10 +1184,8 @@ int pipe_resize_ring(struct pipe_inode_info *pipe, unsigned int nr_slots)
 
 	spin_lock_irq(&pipe->rd_wait.lock);
 	mask = pipe->ring_size - 1;
-	head = pipe->head;
-	tail = pipe->tail;
 
-	n = pipe_occupancy(head, tail);
+	n = pipe_occupancy(pipe->pipe_fifo);
 	if (nr_slots < n) {
 		spin_unlock_irq(&pipe->rd_wait.lock);
 		kfree(bufs);
