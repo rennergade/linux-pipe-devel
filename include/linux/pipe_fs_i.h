@@ -78,7 +78,7 @@ struct pipe_inode_info {
 	struct fasync_struct *fasync_readers;
 	struct fasync_struct *fasync_writers;
 	struct pipe_buffer *bufs;
-	struct kfifo *pipe_fifo;
+	struct kfifo pipe_fifo;
 	spinlock_t reader_spinlock;
 	spinlock_t writer_spinlock;
 	struct user_struct *user;

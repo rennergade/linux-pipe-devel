@@ -109,7 +109,7 @@ static bool post_one_notification(struct watch_queue *wqueue,
 	mask = pipe->ring_size - 1;
 	head = pipe->head;
 	tail = pipe->tail;
-	if (pipe_full(pipe->pipe_fifo, pipe->ring_size))
+	if (pipe_full(&pipe->pipe_fifo, pipe->ring_size))
 		goto lost;
 
 	note = find_first_bit(wqueue->notes_bitmap, wqueue->nr_notes);

@@ -923,14 +923,14 @@ static ssize_t port_fops_splice_write(struct pipe_inode_info *pipe,
 
 	pipe_lock(pipe);
 	ret = 0;
-	if (pipe_empty(pipe->pipe_fifo))
+	if (pipe_empty(&pipe->pipe_fifo))
 		goto error_out;
 
 	ret = wait_port_writable(port, filp->f_flags & O_NONBLOCK);
 	if (ret < 0)
 		goto error_out;
 
-	occupancy = pipe_occupancy(pipe->pipe_fifo);
+	occupancy = pipe_occupancy(&pipe->pipe_fifo);
 	buf = alloc_buf(port->portdev->vdev, 0, occupancy);
 
 	if (!buf) {
