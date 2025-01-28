@@ -297,10 +297,20 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 
 		if (!pipe_empty(pipe->pipe_fifo)) {
 
-			int written;
-			
-			written = kfifo_out_locked(pipe->pipe_fifo, to, total_len, pipe->reader_spinlock);
+			int ret, written;
 
+
+			// may gain performance by only doing this when readers > 1, need to revisit -NR
+			spin_lock(&pipe->reader_spinlock);
+			
+			ret = kfifo_to_user(pipe->pipe_fifo, to, total_len, &written);
+
+			spin_unlock(&pipe->reader_spinlock);
+
+
+			// return ret if kfifo_from_user returns an error - NR
+			if (ret)
+				return ret;
 
 			//TODO packet buffers? - NR
 
@@ -428,7 +438,6 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 	// NR removed page merge, shouldnt be needed here anymore
 
 
-
 	for (;;) {
 		if (!pipe->readers) {
 			send_sig(SIGPIPE, current, 0);
@@ -438,9 +447,18 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 		}
 
 		if (!pipe_full(pipe->pipe_fifo, pipe->max_usage)) {
-			int copied;
+			int copied, copyret;
 
-			copied = kfifo_in_locked(pipe->pipe_fifo, from, total_len, pipe->writer_spinlock);
+			// may gain performance by only doing this when writers > 1, need to revisit -NR
+			spin_lock(&pipe->writer_spinlock);
+			
+			copyret = kfifo_from_user(pipe->pipe_fifo, from, total_len, &copied);
+
+			spin_unlock(&pipe->writer_spinlock);
+
+			// return copyret if kfifo_from_user returns an error - NR
+			if (copyret)
+				return copyret;
 
 			ret += copied;
 
@@ -711,13 +729,14 @@ struct pipe_inode_info *alloc_pipe_info(void)
 	/// I'm going to initialize a kfifo here using the alloc macro and then store it in the pipe struct - NR
 	struct kfifo fifo;
 	
-	if (!kfifo_alloc(&fifo, BIT(pipe_bufs), GFP_KERNEL))
+	/// If kfifo alloc doesn't return 0 its an error, abort
+	if (kfifo_alloc(&fifo, BIT(pipe_bufs), GFP_KERNEL))
 		goto out_revert_acct;
 
 	pipe->pipe_fifo = &fifo;
 
-	spin_lock_init(pipe->writer_spinlock);
-	spin_lock_init(pipe->reader_spinlock);
+	spin_lock_init(&pipe->writer_spinlock);
+	spin_lock_init(&pipe->reader_spinlock);
 
 
 	if (pipe->bufs) {
