@@ -713,6 +713,58 @@ __kfifo_int_must_check_helper( \
 }) \
 )
 
+
+// NR added for pipe iters
+/**
+ * kfifo_from_iter - puts some data from user space into the fifo
+ * @fifo: address of the fifo to be used
+ * @from: pointer to the data to be added
+ * @len: the length of the data to be added
+ * @copied: pointer to output variable to store the number of copied bytes
+ *
+ * This macro copies at most @len bytes from the @from into the
+ * fifo, depending of the available space and returns -EFAULT/0.
+ *
+ * Note that with only one concurrent reader and one concurrent
+ * writer, you don't need extra locking to use these macro.
+ */
+#define	kfifo_from_iter(fifo, from, len, copied) \
+__kfifo_uint_must_check_helper( \
+({ \
+	typeof((fifo) + 1) __tmp = (fifo); \
+	void __user *__from = (from); \
+	unsigned int __len = (len); \
+	unsigned int *__copied = (copied); \
+	struct __kfifo *__kfifo = &__tmp->kfifo; \
+	__kfifo_from_iter(__kfifo, __from, __len, __copied); \
+}) \
+)
+
+/**
+ * kfifo_to_iter - copies data from the fifo into user space
+ * @fifo: address of the fifo to be used
+ * @to: where the data must be copied
+ * @len: the size of the destination buffer
+ * @copied: pointer to output variable to store the number of copied bytes
+ *
+ * This macro copies at most @len bytes from the fifo into the
+ * @to buffer and returns -EFAULT/0.
+ *
+ * Note that with only one concurrent reader and one concurrent
+ * writer, you don't need extra locking to use these macro.
+ */
+#define	kfifo_to_iter(fifo, to, len, copied) \
+__kfifo_int_must_check_helper( \
+({ \
+	typeof((fifo) + 1) __tmp = (fifo); \
+	void __user *__to = (to); \
+	unsigned int __len = (len); \
+	unsigned int *__copied = (copied); \
+	struct __kfifo *__kfifo = &__tmp->kfifo; \
+	__kfifo_to_iter(__kfifo, __to, __len, __copied); \
+}) \
+)
+
 /**
  * kfifo_dma_in_prepare_mapped - setup a scatterlist for DMA input
  * @fifo: address of the fifo to be used
@@ -918,6 +970,14 @@ extern int __kfifo_from_user(struct __kfifo *fifo,
 
 extern int __kfifo_to_user(struct __kfifo *fifo,
 	void __user *to, unsigned long len, unsigned int *copied);
+
+
+// NR Added these for pipe iters
+extern int __kfifo_from_iter(struct __kfifo *fifo, void __user *from,
+	unsigned long len, unsigned int *copied);
+
+extern int __kfifo_to_iter(struct __kfifo *fifo, void __user *to,
+	unsigned long len, unsigned int *copied);
 
 extern unsigned int __kfifo_dma_in_prepare(struct __kfifo *fifo,
 	struct scatterlist *sgl, int nents, unsigned int len, dma_addr_t dma);

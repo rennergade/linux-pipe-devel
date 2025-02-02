@@ -34,6 +34,9 @@ int __kfifo_alloc(struct __kfifo *fifo, unsigned int size,
 	fifo->in = 0;
 	fifo->out = 0;
 	fifo->esize = esize;
+	printk(KERN_INFO "kfifo alloc esize : %lu\n", esize);
+
+
 
 	if (size < 2) {
 		fifo->data = NULL;
@@ -203,7 +206,11 @@ static unsigned long kfifo_copy_from_user(struct __kfifo *fifo,
 	}
 	l = min(len, size - off);
 
+	printk(KERN_INFO "kfifo __copy from user l %u \n", l);
+
 	ret = copy_from_user(fifo->data + off, from, l);
+		printk(KERN_INFO "kfifo __copy from user first ret %lu \n", ret);
+
 	if (unlikely(ret))
 		ret = DIV_ROUND_UP(ret + len - l, esize);
 	else {
@@ -236,7 +243,13 @@ int __kfifo_from_user(struct __kfifo *fifo, const void __user *from,
 	if (len > l)
 		len = l;
 
+
+	printk(KERN_INFO "kfifo copy from user len %lu \n", len);
+
 	ret = kfifo_copy_from_user(fifo, from, len, fifo->in, copied);
+
+	printk(KERN_INFO "kfifo copy from user returns ret: %lu, copied %u \n", ret, *copied);
+
 	if (unlikely(ret)) {
 		len -= ret;
 		err = -EFAULT;
@@ -305,6 +318,141 @@ int __kfifo_to_user(struct __kfifo *fifo, void __user *to,
 	return err;
 }
 EXPORT_SYMBOL(__kfifo_to_user);
+
+
+// NR I added the following functions to copy from iov_iters in pipes
+
+static unsigned long kfifo_copy_from_iter(struct __kfifo *fifo,
+	void __user *from, unsigned int len, unsigned int off,
+	unsigned int *copied)
+{
+	unsigned int size = fifo->mask + 1;
+	unsigned int esize = fifo->esize;
+	unsigned int l;
+	unsigned long bytescopied;
+	unsigned long ret;
+
+	off &= fifo->mask;
+	if (esize != 1) {
+		off *= esize;
+		size *= esize;
+		len *= esize;
+	}
+	l = min(len, size - off);
+
+	
+
+	bytescopied = copy_from_iter(fifo->data + off, l, from);
+	if (bytescopied < len) bytescopied += copy_from_iter(fifo->data, len - l, from);
+	
+
+	ret = DIV_ROUND_UP(len - bytescopied, esize);
+	/*
+	 * make sure that the data in the fifo is up to date before
+	 * incrementing the fifo->in index counter
+	 */
+	smp_wmb();
+	*copied = len - ret * esize;
+	/* return the number of elements which are not copied */
+	return ret;
+}
+
+int __kfifo_from_iter(struct __kfifo *fifo, void __user *from,
+		unsigned long len, unsigned int *copied)
+{
+	unsigned int l;
+	unsigned long ret;
+	unsigned int esize = fifo->esize;
+	int err;
+
+	if (esize != 1)
+		len /= esize;
+
+	l = kfifo_unused(fifo);
+	if (len > l)
+		len = l;
+
+	printk(KERN_INFO "kfifo from iter attempting : %lu\n", len);
+
+	ret = kfifo_copy_from_iter(fifo, from, len, fifo->in, copied);
+
+	printk(KERN_INFO "kfifo copy from iter returns ret: %lu, copied %u \n", ret, *copied);
+
+	if (unlikely(ret)) {
+		len -= ret;
+		err = -EFAULT;
+	} else
+		err = 0;
+	fifo->in += len;
+	return err;
+}
+EXPORT_SYMBOL(__kfifo_from_iter);
+
+static unsigned long kfifo_copy_to_iter(struct __kfifo *fifo, void __user *to,
+		unsigned int len, unsigned int off, unsigned int *copied)
+{
+	unsigned int l;
+	unsigned long ret;
+	unsigned int size = fifo->mask + 1;
+	unsigned int esize = fifo->esize;
+	unsigned long bytescopied;
+
+	off &= fifo->mask;
+	if (esize != 1) {
+		off *= esize;
+		size *= esize;
+		len *= esize;
+	}
+	l = min(len, size - off);
+
+
+	// NR changed these to copy to iter
+	printk(KERN_INFO "kfifo to iter attempting : %u\n", l);
+
+	bytescopied = copy_to_iter(fifo->data + off, l, to);
+	printk(KERN_INFO "kfifo to iter 1 copied : %lu\n", bytescopied);
+
+
+	if (bytescopied < len) bytescopied += copy_to_iter(fifo->data, len - l, to);
+	printk(KERN_INFO "kfifo to iter 2 copied : %lu\n", bytescopied);
+
+
+	ret = DIV_ROUND_UP(len - bytescopied, esize);
+
+	/*
+	 * make sure that the data is copied before
+	 * incrementing the fifo->out index counter
+	 */
+	smp_wmb();
+	*copied = len - ret * esize;
+	/* return the number of elements which are not copied */
+	return ret;
+}
+
+int __kfifo_to_iter(struct __kfifo *fifo, void __user *to,
+		unsigned long len, unsigned int *copied)
+{
+	unsigned int l;
+	unsigned long ret;
+	unsigned int esize = fifo->esize;
+	int err;
+
+	if (esize != 1)
+		len /= esize;
+
+	l = fifo->in - fifo->out;
+	if (len > l)
+		len = l;
+	ret = kfifo_copy_to_iter(fifo, to, len, fifo->out, copied);
+	if (unlikely(ret)) {
+		len -= ret;
+		err = -EFAULT;
+	} else
+		err = 0;
+	fifo->out += len;
+	return err;
+}
+EXPORT_SYMBOL(__kfifo_to_iter);
 
 static unsigned int setup_sgl_buf(struct __kfifo *fifo, struct scatterlist *sgl,
 				  unsigned int data_offset, int nents,

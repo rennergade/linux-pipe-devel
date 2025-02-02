@@ -30,6 +30,8 @@
 #include <linux/uaccess.h>
 #include <asm/ioctls.h>
 
+#include <linux/delay.h>
+
 #include "internal.h"
 
 /*
@@ -303,14 +305,14 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 			// may gain performance by only doing this when readers > 1, need to revisit -NR
 			spin_lock(&pipe->reader_spinlock);
 			
-			ret = kfifo_to_user(&pipe->pipe_fifo, to, total_len, &written);
+			ret = kfifo_to_iter(&pipe->pipe_fifo, to, total_len, &written);
 
 			spin_unlock(&pipe->reader_spinlock);
 
+			printk(KERN_INFO "pipe read copied: %d\n", written);
+			msleep(3000);
 
-			// return ret if kfifo_from_user returns an error - NR
-			if (ret)
-				return ret;
+
 
 			//TODO packet buffers? - NR
 
@@ -326,10 +328,13 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 			}
 
 			// NR - changed this to break if anything is read
-			if (!written)
+			if (total_len - written == 0)
 				break;	/* common path: read succeeded */
-			if (!pipe_empty(&pipe->pipe_fifo))	/* More to do? */
+			if (!pipe_empty(&pipe->pipe_fifo)) {	/* More to do? */
+				printk(KERN_INFO "more in pipe?\n");
+
 				continue;
+			}
 		}
 
 		if (!pipe->writers)
@@ -449,16 +454,25 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 		if (!pipe_full(&pipe->pipe_fifo, pipe->max_usage)) {
 			int copied, copyret;
 
+
+			printk(KERN_INFO "pipe write attempting to write: %lu\n", total_len);
+
 			// may gain performance by only doing this when writers > 1, need to revisit -NR
 			spin_lock(&pipe->writer_spinlock);
+
+
 			
-			copyret = kfifo_from_user(&pipe->pipe_fifo, from, total_len, &copied);
+			copyret = kfifo_from_iter(&pipe->pipe_fifo, from, total_len, &copied);
 
 			spin_unlock(&pipe->writer_spinlock);
+
+			printk(KERN_INFO "pipe write copied: %d\n", copied);
 
 			// return copyret if kfifo_from_user returns an error - NR
 			if (copyret)
 				return copyret;
+
+			msleep(1000);
 
 			ret += copied;
 

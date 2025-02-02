@@ -218,6 +218,7 @@ size_t copy_to_iter(const void *addr, size_t bytes, struct iov_iter *i)
 {
 	if (check_copy_size(addr, bytes, true))
 		return _copy_to_iter(addr, bytes, i);
+	printk(KERN_INFO "copy to iter early return\n");
 	return 0;
 }
 
