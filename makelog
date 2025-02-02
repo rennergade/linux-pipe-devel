@@ -1,7 +1,0 @@
-  CALL    scripts/checksyscalls.sh
-  DESCEND objtool
-  INSTALL libsubcmd_headers
-make[3]: *** [scripts/Makefile.build:440: arch/x86/kernel] Interrupt
-make[2]: *** [scripts/Makefile.build:440: arch/x86] Interrupt
-make[1]: *** [/home/rennergade/developer/linux-pipe-devel/Makefile:1994: .] Interrupt
-make: *** [Makefile:251: __sub-make] Interrupt
