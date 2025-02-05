@@ -303,13 +303,13 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 
 		if (!pipe_empty(&pipe->pipe_fifo)) {
 
-			int ret, written;
+			int copyret, written;
 
 			// may gain performance by only doing this when readers > 1, need to revisit -NR
 			// changed to mutexes since you cant copy to user space with spinlock
 			mutex_lock(&pipe->reader_mutex);
 			
-			ret = kfifo_to_iter(&pipe->pipe_fifo, to, total_len, &written);
+			copyret = kfifo_to_iter(&pipe->pipe_fifo, to, total_len, &written);
 
 			mutex_unlock(&pipe->reader_mutex);
 
@@ -323,6 +323,8 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 			// 	buf->len = 0;
 			// }
 
+			ret = written; // NR - if we write anything return it
+
 			// NR - I changed this to if we read more than a page from having an empty page buffer, not sure if thats right
 			if (written >= PAGE_SIZE) {
 				wake_writer |= pipe_full(&pipe->pipe_fifo, pipe->max_usage);
@@ -332,8 +334,6 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 			if (total_len - written == 0)
 				break;	/* common path: read succeeded */
 			if (!pipe_empty(&pipe->pipe_fifo)) {	/* More to do? */
-				printk(KERN_INFO "more in pipe?\n");
-
 				continue;
 			}
 		}
