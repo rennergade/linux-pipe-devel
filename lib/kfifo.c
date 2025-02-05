@@ -34,9 +34,6 @@ int __kfifo_alloc(struct __kfifo *fifo, unsigned int size,
 	fifo->in = 0;
 	fifo->out = 0;
 	fifo->esize = esize;
-	printk(KERN_INFO "kfifo alloc esize : %lu\n", esize);
-
-
 
 	if (size < 2) {
 		fifo->data = NULL;
@@ -206,10 +203,7 @@ static unsigned long kfifo_copy_from_user(struct __kfifo *fifo,
 	}
 	l = min(len, size - off);
 
-	printk(KERN_INFO "kfifo __copy from user l %u \n", l);
-
 	ret = copy_from_user(fifo->data + off, from, l);
-		printk(KERN_INFO "kfifo __copy from user first ret %lu \n", ret);
 
 	if (unlikely(ret))
 		ret = DIV_ROUND_UP(ret + len - l, esize);
@@ -243,12 +237,7 @@ int __kfifo_from_user(struct __kfifo *fifo, const void __user *from,
 	if (len > l)
 		len = l;
 
-
-	printk(KERN_INFO "kfifo copy from user len %lu \n", len);
-
 	ret = kfifo_copy_from_user(fifo, from, len, fifo->in, copied);
-
-	printk(KERN_INFO "kfifo copy from user returns ret: %lu, copied %u \n", ret, *copied);
 
 	if (unlikely(ret)) {
 		len -= ret;
@@ -369,14 +358,11 @@ int __kfifo_from_iter(struct __kfifo *fifo, void __user *from,
 		len /= esize;
 
 	l = kfifo_unused(fifo);
+
 	if (len > l)
 		len = l;
 
-	printk(KERN_INFO "kfifo from iter attempting : %lu\n", len);
-
 	ret = kfifo_copy_from_iter(fifo, from, len, fifo->in, copied);
-
-	printk(KERN_INFO "kfifo copy from iter returns ret: %lu, copied %u \n", ret, *copied);
 
 	if (unlikely(ret)) {
 		len -= ret;
@@ -384,6 +370,7 @@ int __kfifo_from_iter(struct __kfifo *fifo, void __user *from,
 	} else
 		err = 0;
 	fifo->in += len;
+
 	return err;
 }
 EXPORT_SYMBOL(__kfifo_from_iter);
@@ -405,17 +392,10 @@ static unsigned long kfifo_copy_to_iter(struct __kfifo *fifo, void __user *to,
 	}
 	l = min(len, size - off);
 
-
 	// NR changed these to copy to iter
-	printk(KERN_INFO "kfifo to iter attempting : %u\n", l);
 
 	bytescopied = copy_to_iter(fifo->data + off, l, to);
-	printk(KERN_INFO "kfifo to iter 1 copied : %lu\n", bytescopied);
-
-
 	if (bytescopied < len) bytescopied += copy_to_iter(fifo->data, len - l, to);
-	printk(KERN_INFO "kfifo to iter 2 copied : %lu\n", bytescopied);
-
 
 	ret = DIV_ROUND_UP(len - bytescopied, esize);
 

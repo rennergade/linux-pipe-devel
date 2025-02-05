@@ -34,6 +34,10 @@
 
 #include "internal.h"
 
+#include <linux/uaccess.h>
+#include <linux/printk.h>
+#include <linux/uio.h>
+
 /*
  * New pipe buffers will be restricted to this size while the user is exceeding
  * their pipe buffer quota. The general pipe use case needs at least two
@@ -301,18 +305,15 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 
 			int ret, written;
 
-
 			// may gain performance by only doing this when readers > 1, need to revisit -NR
-			spin_lock(&pipe->reader_spinlock);
+			// changed to mutexes since you cant copy to user space with spinlock
+			mutex_lock(&pipe->reader_mutex);
 			
 			ret = kfifo_to_iter(&pipe->pipe_fifo, to, total_len, &written);
 
-			spin_unlock(&pipe->reader_spinlock);
+			mutex_unlock(&pipe->reader_mutex);
 
 			printk(KERN_INFO "pipe read copied: %d\n", written);
-			msleep(3000);
-
-
 
 			//TODO packet buffers? - NR
 
@@ -458,13 +459,12 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 			printk(KERN_INFO "pipe write attempting to write: %lu\n", total_len);
 
 			// may gain performance by only doing this when writers > 1, need to revisit -NR
-			spin_lock(&pipe->writer_spinlock);
+			// changed from spinlock because you cant copy to userspace with spinlock
+			mutex_lock(&pipe->writer_mutex);
 
-
-			
 			copyret = kfifo_from_iter(&pipe->pipe_fifo, from, total_len, &copied);
 
-			spin_unlock(&pipe->writer_spinlock);
+			mutex_unlock(&pipe->writer_mutex);
 
 			printk(KERN_INFO "pipe write copied: %d\n", copied);
 
@@ -745,8 +745,8 @@ struct pipe_inode_info *alloc_pipe_info(void)
 		goto out_revert_acct;
 
 
-	spin_lock_init(&pipe->writer_spinlock);
-	spin_lock_init(&pipe->reader_spinlock);
+	mutex_init(&pipe->writer_mutex);
+	mutex_init(&pipe->reader_mutex);
 
 
 	if (pipe->bufs) {

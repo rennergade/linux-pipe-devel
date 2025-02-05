@@ -17,21 +17,13 @@ static __always_inline
 size_t copy_to_user_iter(void __user *iter_to, size_t progress,
 			 size_t len, void *from, void *priv2)
 {
-	printk(KERN_INFO "in copy to user iter");
-
 	if (should_fail_usercopy())
 		return len;
 	if (access_ok(iter_to, len)) {
-		printk(KERN_INFO "access ok");
-		printk(KERN_INFO "raw copying len %lu", len);
-
 		from += progress;
 		instrument_copy_to_user(iter_to, from, len);
 		len = raw_copy_to_user(iter_to, from, len);
-
 	}
-	printk(KERN_INFO "not copied: len %lu", len);
-
 	return len;
 }
 
@@ -188,11 +180,8 @@ size_t _copy_to_iter(const void *addr, size_t bytes, struct iov_iter *i)
 {
 	if (WARN_ON_ONCE(i->data_source))
 		return 0;
-	printk(KERN_INFO "copy iter past 1st warn");
-
 	if (user_backed_iter(i))
 		might_fault();
-	printk(KERN_INFO "copy iter past might fault");
 
 	
 	return iterate_and_advance(i, bytes, (void *)addr,
