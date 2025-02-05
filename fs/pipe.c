@@ -265,6 +265,9 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 		return 0;
 
 	ret = 0;
+	// may gain performance by only doing this when readers > 1, need to revisit -NR
+	// changed to mutexes since you cant copy to user space with spinlock
+	mutex_lock(&pipe->reader_mutex);
 
 	/*
 	 * We only wake up writers if the pipe was full when we started reading
@@ -304,16 +307,8 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 		if (!pipe_empty(&pipe->pipe_fifo)) {
 
 			int copyret, written;
-
-			// may gain performance by only doing this when readers > 1, need to revisit -NR
-			// changed to mutexes since you cant copy to user space with spinlock
-			mutex_lock(&pipe->reader_mutex);
 			
 			copyret = kfifo_to_iter(&pipe->pipe_fifo, to, total_len, &written);
-
-			mutex_unlock(&pipe->reader_mutex);
-
-			printk(KERN_INFO "pipe read copied: %d\n", written);
 
 			//TODO packet buffers? - NR
 
@@ -383,6 +378,8 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 	}
 	if (pipe_empty(&pipe->pipe_fifo))
 		wake_next_reader = false;
+	// NR unlock reader mutex
+	mutex_unlock(&pipe->reader_mutex);
 
 	if (wake_writer)
 		wake_up_interruptible_sync_poll(&pipe->wr_wait, EPOLLOUT | EPOLLWRNORM);
@@ -443,6 +440,10 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 
 	// NR removed page merge, shouldnt be needed here anymore
 
+	// may gain performance by only doing this when writers > 1, need to revisit -NR
+	// changed from spinlock because you cant copy to userspace with spinlock
+	mutex_lock(&pipe->writer_mutex);
+
 
 	for (;;) {
 		if (!pipe->readers) {
@@ -455,24 +456,11 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 		if (!pipe_full(&pipe->pipe_fifo, pipe->max_usage)) {
 			int copied, copyret;
 
-
-			printk(KERN_INFO "pipe write attempting to write: %lu\n", total_len);
-
-			// may gain performance by only doing this when writers > 1, need to revisit -NR
-			// changed from spinlock because you cant copy to userspace with spinlock
-			mutex_lock(&pipe->writer_mutex);
-
 			copyret = kfifo_from_iter(&pipe->pipe_fifo, from, total_len, &copied);
-
-			mutex_unlock(&pipe->writer_mutex);
-
-			printk(KERN_INFO "pipe write copied: %d\n", copied);
 
 			// return copyret if kfifo_from_user returns an error - NR
 			if (copyret)
 				return copyret;
-
-			msleep(1000);
 
 			ret += copied;
 
@@ -513,6 +501,10 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 out:
 	if (pipe_full(&pipe->pipe_fifo, pipe->max_usage))
 		wake_next_writer = false;
+	
+	// NR unlock writer mutex
+	mutex_unlock(&pipe->writer_mutex);
+
 
 	/*
 	 * If we do do a wakeup event, we do a 'sync' wakeup, because we
