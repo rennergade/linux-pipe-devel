@@ -454,15 +454,12 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 				ret = -EPIPE;
 			break;
 		}
-		// printk("preloop\n");
 
 		if (!pipe_full(&pipe->pipe_fifo, pipe->max_usage)) {
 		
 			int copied, copyret;
 
-			// printk("writing %lu\n", total_len);
 			copyret = kfifo_from_iter(&pipe->pipe_fifo, from, total_len, &copied);
-			// printk("copied %d\n", copied);
 
 			// return copyret if kfifo_from_user returns an error - NR
 			if (copyret)
@@ -509,7 +506,6 @@ out:
 	if (pipe_full(&pipe->pipe_fifo, pipe->max_usage))
 		wake_next_writer = false;
 	
-	// printk("next writer %d\n", wake_next_writer);
 	// NR unlock writer mutex
 	mutex_unlock(&pipe->writer_mutex);
 
