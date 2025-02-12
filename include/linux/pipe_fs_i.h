@@ -160,6 +160,7 @@ static inline bool pipe_empty(struct kfifo *pipe_fifo)
  * @head: The pipe ring head pointer
  * @tail: The pipe ring tail pointer
  */
+// NR I think everything that uses this is going to be broken for now since it deals with pages
 static inline unsigned int pipe_occupancy(struct kfifo *pipe_fifo)
 {
 	return kfifo_len(pipe_fifo);
@@ -174,7 +175,9 @@ static inline unsigned int pipe_occupancy(struct kfifo *pipe_fifo)
 static inline bool pipe_full(struct kfifo *pipe_fifo,
 			     unsigned int limit)
 {
-	return pipe_occupancy(pipe_fifo) >= limit;
+	// NR multiplied limit by page size here since its dealing with pages, not sure the best way 
+	// to address this long term
+	return pipe_occupancy(pipe_fifo) >= (limit * PAGE_SIZE);
 }
 
 /**

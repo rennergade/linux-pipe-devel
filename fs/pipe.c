@@ -321,9 +321,9 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 			ret = written; // NR - if we write anything return it
 
 			// NR - I changed this to if we read more than a page from having an empty page buffer, not sure if thats right
-			if (written >= PAGE_SIZE) {
+			if (written >= PAGE_SIZE) 
 				wake_writer |= pipe_full(&pipe->pipe_fifo, pipe->max_usage);
-			}
+			
 
 			// NR - changed this to break if anything is read
 			if (total_len - written == 0)
@@ -438,13 +438,15 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 		goto out;
 	}
 
+	was_empty = pipe_empty(&pipe->pipe_fifo);
+
 	// NR removed page merge, shouldnt be needed here anymore
 
 	// may gain performance by only doing this when writers > 1, need to revisit -NR
 	// changed from spinlock because you cant copy to userspace with spinlock
+
 	mutex_lock(&pipe->writer_mutex);
-
-
+	
 	for (;;) {
 		if (!pipe->readers) {
 			send_sig(SIGPIPE, current, 0);
@@ -452,17 +454,23 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 				ret = -EPIPE;
 			break;
 		}
+		// printk("preloop\n");
 
 		if (!pipe_full(&pipe->pipe_fifo, pipe->max_usage)) {
+		
 			int copied, copyret;
 
+			// printk("writing %lu\n", total_len);
 			copyret = kfifo_from_iter(&pipe->pipe_fifo, from, total_len, &copied);
+			// printk("copied %d\n", copied);
 
 			// return copyret if kfifo_from_user returns an error - NR
 			if (copyret)
 				return copyret;
 
+			total_len -= copied;
 			ret += copied;
+
 
 			if (!iov_iter_count(from))
 				break;
@@ -494,7 +502,6 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 			wake_up_interruptible_sync_poll(&pipe->rd_wait, EPOLLIN | EPOLLRDNORM);
 		kill_fasync(&pipe->fasync_readers, SIGIO, POLL_IN);
 		wait_event_interruptible_exclusive(pipe->wr_wait, pipe_writable(pipe));
-
 		was_empty = pipe_empty(&pipe->pipe_fifo);
 		wake_next_writer = true;
 	}
@@ -502,6 +509,7 @@ out:
 	if (pipe_full(&pipe->pipe_fifo, pipe->max_usage))
 		wake_next_writer = false;
 	
+	// printk("next writer %d\n", wake_next_writer);
 	// NR unlock writer mutex
 	mutex_unlock(&pipe->writer_mutex);
 
@@ -529,6 +537,7 @@ out:
 			ret = err;
 		sb_end_write(file_inode(filp)->i_sb);
 	}
+
 	return ret;
 }
 
