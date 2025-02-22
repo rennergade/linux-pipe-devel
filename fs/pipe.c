@@ -92,17 +92,24 @@ static int pipe_lock_cmp_fn(const struct lockdep_map *a,
 }
 #endif
 
+// NR - it seems like these functions are used in some different ways across files, going to
+// just replace it with locking both ends for now
 void pipe_lock(struct pipe_inode_info *pipe)
 {
-	if (pipe->files)
-		mutex_lock(&pipe->mutex);
+	if (pipe->files) {
+		mutex_lock(&pipe->reader_mutex);
+		mutex_lock(&pipe->writer_mutex);
+	}
+
 }
 EXPORT_SYMBOL(pipe_lock);
 
 void pipe_unlock(struct pipe_inode_info *pipe)
 {
-	if (pipe->files)
-		mutex_unlock(&pipe->mutex);
+	if (pipe->files) {
+		mutex_unlock(&pipe->reader_mutex);
+		mutex_lock(&pipe->writer_mutex);
+	}
 }
 EXPORT_SYMBOL(pipe_unlock);
 
