@@ -322,7 +322,7 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 
 			// NR - I changed this to if we read more than a page from having an empty page buffer, not sure if thats right
 			if (written >= PAGE_SIZE) 
-				wake_writer |= pipe_full(&pipe->pipe_fifo, pipe->max_usage);
+				wake_writer = true;// |= pipe_full(&pipe->pipe_fifo, pipe->max_usage);
 			
 
 			// NR - changed this to break if anything is read
