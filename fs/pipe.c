@@ -116,16 +116,7 @@ static void anon_pipe_buf_release(struct pipe_inode_info *pipe,
 				  struct pipe_buffer *buf)
 {
 	struct page *page = buf->page;
-
-	/*
-	 * If nobody else uses this page, and we don't already have a
-	 * temporary page, let's keep track of it as a one-deep
-	 * allocation cache. (Otherwise just release our reference to it)
-	 */
-	if (page_count(page) == 1 && !pipe->tmp_page)
-		pipe->tmp_page = page;
-	else
-		put_page(page);
+	put_page(page);
 }
 
 static bool anon_pipe_buf_try_steal(struct pipe_inode_info *pipe,
@@ -221,8 +212,6 @@ static inline unsigned int pipe_update_tail(struct pipe_inode_info *pipe,
 					    struct pipe_buffer *buf,
 					    unsigned int tail)
 {
-	pipe_buf_release(pipe, buf);
-
 	/*
 	 * If the pipe has a watch_queue, we need additional protection
 	 * by the spinlock because notifications get posted with only
@@ -507,28 +496,21 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 		if (!pipe_full(head, pipe->tail, pipe->max_usage)) {
 			unsigned int mask = pipe->ring_size - 1;
 			struct pipe_buffer *buf;
-			struct page *page = pipe->tmp_page;
 			int copied;
 
-			if (!page) {
-				page = alloc_page(GFP_HIGHUSER | __GFP_ACCOUNT);
-				if (unlikely(!page)) {
+			/* If the write can't be merged, grab the next page from the array*/
+			pipe->head = head + 1;
+			buf = &pipe->bufs[head & mask];
+
+			/* Allocate a page if one doesn't already exist */
+			if (!buf->page) {
+				buf->page = alloc_page(GFP_HIGHUSER | __GFP_ACCOUNT);
+				if (unlikely(!buf->page)) {
 					ret = ret ? : -ENOMEM;
 					break;
 				}
-				pipe->tmp_page = page;
 			}
 
-			/* Allocate a slot in the ring in advance and attach an
-			 * empty buffer.  If we fault or otherwise fail to use
-			 * it, either the reader will consume it or it'll still
-			 * be there for the next write.
-			 */
-			pipe->head = head + 1;
-
-			/* Insert it into the buffer array */
-			buf = &pipe->bufs[head & mask];
-			buf->page = page;
 			buf->ops = &anon_pipe_buf_ops;
 			buf->offset = 0;
 			buf->len = 0;
@@ -536,9 +518,8 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 				buf->flags = PIPE_BUF_FLAG_PACKET;
 			else
 				buf->flags = PIPE_BUF_FLAG_CAN_MERGE;
-			pipe->tmp_page = NULL;
 
-			copied = copy_page_from_iter(page, 0, PAGE_SIZE, from);
+			copied = copy_page_from_iter(buf->page, 0, PAGE_SIZE, from);
 			if (unlikely(copied < PAGE_SIZE && iov_iter_count(from))) {
 				if (!ret)
 					ret = -EFAULT;
@@ -857,8 +838,6 @@ void free_pipe_info(struct pipe_inode_info *pipe)
 	if (pipe->watch_queue)
 		put_watch_queue(pipe->watch_queue);
 #endif
-	if (pipe->tmp_page)
-		__free_page(pipe->tmp_page);
 	kfree(pipe->bufs);
 	kfree(pipe);
 }
