@@ -274,7 +274,7 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 	ret = 0;
 	// may gain performance by only doing this when readers > 1, need to revisit -NR
 	// changed to mutexes since you cant copy to user space with spinlock
-	mutex_lock(&pipe->reader_mutex);
+	// mutex_lock(&pipe->reader_mutex);
 
 	/*
 	 * We only wake up writers if the pipe was full when we started reading
@@ -384,7 +384,7 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 
 		wake_writer = false;
 		wake_next_reader = true;
-		mutex_lock(&pipe->reader_mutex);
+		// mutex_lock(&pipe->reader_mutex);
 	}
 	if (pipe_empty(&pipe->pipe_fifo))
 		wake_next_reader = false;
@@ -455,7 +455,7 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 	// may gain performance by only doing this when writers > 1, need to revisit -NR
 	// changed from spinlock because you cant copy to userspace with spinlock
 
-	mutex_lock(&pipe->writer_mutex);
+	// mutex_lock(&pipe->writer_mutex);
 	
 	for (;;) {
 		if (!pipe->readers) {
@@ -513,7 +513,7 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 		// printk("about to write wait");
 		// wait_event_interruptible_exclusive(pipe->wr_wait, pipe_writable(pipe));
 		
-		mutex_lock(&pipe->writer_mutex);
+		// mutex_lock(&pipe->writer_mutex);
 
 		was_empty = pipe_empty(&pipe->pipe_fifo);
 		wake_next_writer = true;
