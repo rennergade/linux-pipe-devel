@@ -379,8 +379,8 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 		 * since we've done any required wakeups and there's no need
 		 * to mark anything accessed. And we've dropped the lock.
 		 */
-		// if (wait_event_interruptible_exclusive(pipe->rd_wait, pipe_readable(pipe)) < 0)
-		// 	return -ERESTARTSYS;
+		if (wait_event_interruptible_exclusive(pipe->rd_wait, pipe_readable(pipe)) < 0)
+			return -ERESTARTSYS;
 
 		wake_writer = false;
 		wake_next_reader = true;
@@ -510,8 +510,7 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 		if (was_empty)
 			wake_up_interruptible_sync_poll(&pipe->rd_wait, EPOLLIN | EPOLLRDNORM);
 		kill_fasync(&pipe->fasync_readers, SIGIO, POLL_IN);
-		// printk("about to write wait");
-		// wait_event_interruptible_exclusive(pipe->wr_wait, pipe_writable(pipe));
+		wait_event_interruptible_exclusive(pipe->wr_wait, pipe_writable(pipe));
 		
 		// mutex_lock(&pipe->writer_mutex);
 
